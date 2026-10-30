@@ -315,17 +315,40 @@ namespace Rsbc.Dmf.CaseManagement
                 .Where(x => x.bcgov_documenturlid == request.Id)
                 .FirstOrDefault();
 
+            if (document == null)
+            {
+                return false;
+            }
+
             if (request.SubmittalStatus != default)
             {
                 document.dfp_submittalstatus = request.SubmittalStatus;
 
             }
 
-            document.dfp_dpspriority = TranslatePriorityCode(request.DpsPriority);
-            document.dfp_queue = TranslateQueueCode(request.Queue);
+            if (!string.IsNullOrEmpty(request.DpsPriority))
+            {
+                document.dfp_dpspriority = TranslatePriorityCode(request.DpsPriority);
+            }
+
+            if (!string.IsNullOrEmpty(request.Queue))
+            {
+                document.dfp_queue = TranslateQueueCode(request.Queue);
+            }
             //document.dfp_DocumentTypeID.dfp_name = "DMER";
 
             dynamicsContext.UpdateObject(document);
+
+            if (request.CaseId.HasValue && request.CaseId.Value != Guid.Empty)
+            {
+                var theCase = dynamicsContext.incidents.Where(i => i.incidentid == request.CaseId.Value).FirstOrDefault();
+                if (theCase == null)
+                {
+                    return false;
+                }
+                dynamicsContext.SetLink(document, nameof(bcgov_documenturl.bcgov_CaseId), theCase);
+            }
+
             dynamicsContext.SaveChanges();
             return true;
         }

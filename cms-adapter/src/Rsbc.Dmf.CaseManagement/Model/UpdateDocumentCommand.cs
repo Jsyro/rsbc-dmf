@@ -10,6 +10,7 @@ namespace Rsbc.Dmf.CaseManagement
         public string DpsPriority { get; set; }
 
         public string Queue { get; set; }
-       
+
+        public Guid? CaseId { get; set; }
     }
 }

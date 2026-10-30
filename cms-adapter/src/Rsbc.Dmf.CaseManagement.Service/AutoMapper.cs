@@ -63,7 +63,8 @@ namespace Rsbc.Dmf.CaseManagement.Service
             CreateMap<UpdateDocumentRequest, UpdateDocumentCommand>()
               .ForMember(dest => dest.Id, opt => opt.MapFrom(src => string.IsNullOrEmpty(src.Id) ? (Guid?)null : Guid.Parse(src.Id)))
               .ForMember(dest => dest.DpsPriority, opt => opt.MapFrom(src => src.DpsPriority))
-              .ForMember(dest => dest.Queue, opt => opt.MapFrom(src => src.Queue));
+              .ForMember(dest => dest.Queue, opt => opt.MapFrom(src => src.Queue))
+              .ForMember(dest => dest.CaseId, opt => opt.MapFrom(src => string.IsNullOrEmpty(src.CaseId) ? (Guid?)null : Guid.Parse(src.CaseId)));
 
             CreateMap<Dto.Document, Document>()
                 .ForMember(dest => dest.Provider, opt => opt.MapFrom(src => src.Login))

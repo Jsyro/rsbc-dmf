@@ -1892,6 +1892,7 @@ namespace Rsbc.Dmf.CaseManagement.Service
                         await CreateBringForward(caseCreateRequest.CaseId, caseCreateRequest.TriggerType, subject, description);
                     }
 
+                    reply.Id = caseCreateRequest.CaseId ?? string.Empty;
                     reply.ResultStatus = ResultStatus.Success;
                 }
                 else
