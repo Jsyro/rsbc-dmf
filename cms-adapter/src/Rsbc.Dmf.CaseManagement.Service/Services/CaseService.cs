@@ -1764,6 +1764,7 @@ namespace Rsbc.Dmf.CaseManagement.Service
 
                     await _caseManager.CreateCaseDocumentUrl(docUrl);
 
+                    reply.Id = activeRemedialCase.CaseId;
                     reply.ResultStatus = DmerResultStatus.Exists;
                     return reply;
                 }
@@ -1804,6 +1805,7 @@ namespace Rsbc.Dmf.CaseManagement.Service
                     };
                     await _caseManager.CreateCaseDocumentUrl(docUrl);
 
+                    reply.Id = caseCreateRequest.CaseId ?? string.Empty;
                     reply.ResultStatus = DmerResultStatus.Success;
                 }
                 else
@@ -1828,6 +1830,122 @@ namespace Rsbc.Dmf.CaseManagement.Service
         /// <param name="request"></param>
         /// <param name="context"></param>
         /// <returns></returns>
+        public override async Task<ResultStatusReply> AddCaseToDmer(AddCaseToDmerRequest request, ServerCallContext context)
+        {
+            string caseId = null;
+            var errorMessage = "Unable to get the DMER record.";
+
+            try
+            {
+                if (!Guid.TryParse(request.DmerId, out var documentId) || documentId == Guid.Empty)
+                {
+                    throw new RpcException(new Status(StatusCode.InvalidArgument, "A valid DMER document ID is required."));
+                }
+
+                var document = await _documentManager.GetLegacyDocument(documentId.ToString());
+                if (document == null || string.IsNullOrEmpty(document.DocumentId))
+                {
+                    throw new RpcException(new Status(StatusCode.NotFound, "DMER record not found."));
+                }
+
+                if (!string.IsNullOrEmpty(document.CaseId))
+                {
+                    throw new RpcException(new Status(StatusCode.AlreadyExists, "DMER is already linked to a case."));
+                }
+
+                var driverLicenseNumber = string.IsNullOrEmpty(document.Driver?.DriverLicenseNumber)
+                    ? request.DriverId
+                    : document.Driver.DriverLicenseNumber;
+                if (string.IsNullOrEmpty(driverLicenseNumber))
+                {
+                    throw new RpcException(new Status(StatusCode.InvalidArgument, "DMER is not associated with a driver."));
+                }
+
+                errorMessage = "Unable to get the driver's active cases.";
+                var driver = (await _caseManager.GetDriverByLicenseNumber(driverLicenseNumber)).FirstOrDefault();
+                if (driver == null || !Guid.TryParse(driver.Id, out var driverId))
+                {
+                    throw new RpcException(new Status(StatusCode.Internal, errorMessage));
+                }
+
+                var activeCases = await _caseManager.GetCases(driverId, Dynamics.EntityState.Active, null);
+                if (activeCases == null)
+                {
+                    throw new RpcException(new Status(StatusCode.Internal, errorMessage));
+                }
+
+                if (activeCases.Any())
+                {
+                    throw new RpcException(new Status(StatusCode.AlreadyExists, "Driver already has an active case."));
+                }
+
+                errorMessage = "Unable to create the case.";
+                var caseType = string.IsNullOrWhiteSpace(request.CaseType) ? "DMER" : request.CaseType;
+                var owner = string.IsNullOrWhiteSpace(request.Owner) ? null : request.Owner;
+                if (string.Equals(caseType, "REM", StringComparison.OrdinalIgnoreCase) && owner == null)
+                {
+                    owner = "Pending Rehab Review";
+                }
+
+                // reuse service used in auto case creation
+                var createdCase = await CreateDmerCase(new CreateDmerCaseRequest
+                {
+                    DriverLicenseNumber = driverLicenseNumber,
+                    CaseTypeCode = caseType,
+                    Owner = owner ?? string.Empty,
+                    ProgramArea = "DMF",
+                    TriggerType = "DMER",
+                    DocumentType = string.IsNullOrWhiteSpace(request.DocumentType) ? "DMER" : request.DocumentType,
+                    MedicalIssueDate = Timestamp.FromDateTimeOffset(document.FaxReceivedDate ?? document.CreateDate)
+                }, context);
+                if (createdCase.ResultStatus == DmerResultStatus.Exists)
+                {
+                    throw new RpcException(new Status(StatusCode.AlreadyExists, "Driver already has an active case."));
+                }
+                if (createdCase.ResultStatus != DmerResultStatus.Success ||
+                    !Guid.TryParse(createdCase.Id, out var createdCaseId) || createdCaseId == Guid.Empty)
+                {
+                    throw new RpcException(new Status(StatusCode.Internal, errorMessage));
+                }
+
+                caseId = createdCaseId.ToString();
+                errorMessage = "Case created but the DMER could not be linked to it.";
+                if (!_documentManager.UpdateDocument(new UpdateDocumentCommand { Id = documentId, CaseId = createdCaseId }))
+                {
+                    throw new RpcException(new Status(StatusCode.Internal, errorMessage));
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.Comment))
+                {
+                    errorMessage = "Case created and DMER linked, but the comment could not be added.";
+                    var comment = await _caseManager.CreateLegacyCaseComment(new CaseManagement.LegacyComment
+                    {
+                        CaseId = caseId,
+                        CommentText = request.Comment,
+                        CommentTypeCode = "C",
+                        CommentDate = DateTimeOffset.UtcNow,
+                        Driver = new CaseManagement.Driver { DriverLicenseNumber = driverLicenseNumber }
+                    });
+                    if (!comment.Success)
+                    {
+                        throw new RpcException(new Status(StatusCode.Internal, errorMessage));
+                    }
+                }
+
+                return new ResultStatusReply { ResultStatus = ResultStatus.Success, Id = caseId };
+            }
+            catch (RpcException exception)
+            {
+                _logger.LogWarning(exception, "Unable to add a case to DMER {DmerId}. Created case: {CaseId}.", request.DmerId, caseId);
+                throw;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogError(exception, "Unable to add a case to DMER {DmerId}. Created case: {CaseId}.", request.DmerId, caseId);
+                throw new RpcException(new Status(StatusCode.Internal, errorMessage));
+            }
+        }
+
         public async override Task<ResultStatusReply> CreateCase(CreateCaseRequest request, ServerCallContext context)
         {
             var reply = new ResultStatusReply();

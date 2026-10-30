@@ -223,107 +223,44 @@ namespace Rsbc.Dmf.IcbcAdapter.Controllers
     public async Task<ActionResult> AddCaseToDmer([FromRoute] Guid dmerid, [FromBody] CreateDmerCaseBody createDmerCaseBody, CancellationToken cancellationToken)
         {
             using var scope = _serviceScopeFactory.CreateScope();
-            var documentManagerClient = scope.ServiceProvider.GetRequiredService<DocumentManager.DocumentManagerClient>();
             var caseManagerClient = scope.ServiceProvider.GetRequiredService<CaseManager.CaseManagerClient>();
 
             try
             {
-                // 1. load the DMER and its driver
-                var documentReply = await caseManagerClient.GetLegacyDocumentAsync(
-                    new LegacyDocumentRequest { DocumentId = dmerid.ToString() },
-                    cancellationToken: cancellationToken);
-                if (documentReply.ResultStatus != CaseManagement.Service.ResultStatus.Success)
-                {
-                    _logger.LogError("CMS adapter could not get document {DocumentRecordId}: {Error}", dmerid, documentReply.ErrorDetail);
-                    return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Unable to get the DMER record.");
-                }
-
-                var document = documentReply.Document;
-                if (document == null || string.IsNullOrEmpty(document.DocumentId))
-                {
-                    return Problem(statusCode: StatusCodes.Status404NotFound, title: "DMER record not found.");
-                }
-
-                if (!string.IsNullOrEmpty(document.CaseId))
-                {
-                    return Problem(statusCode: StatusCodes.Status409Conflict, title: "DMER is already linked to a case.");
-                }
-
-                var driverLicenseNumber = string.IsNullOrEmpty(document.Driver?.DriverLicenseNumber)
-                    ? createDmerCaseBody.DriverId
-                    : document.Driver.DriverLicenseNumber;
-                if (string.IsNullOrEmpty(driverLicenseNumber))
-                {
-                    return Problem(statusCode: StatusCodes.Status400BadRequest, title: "DMER is not associated with a driver.");
-                }
-
-                // 2. create a case if the driver has none active
-                var activeCasesReply = await caseManagerClient.GetActiveCasesAsync(
-                    new DriverLicenseRequest { DriverLicenseNumber = driverLicenseNumber },
-                    cancellationToken: cancellationToken);
-                if (activeCasesReply.ResultStatus != CaseManagement.Service.ResultStatus.Success)
-                {
-                    _logger.LogError("CMS adapter could not get active cases: {Error}", activeCasesReply.ErrorDetail);
-                    return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Unable to get the driver's active cases.");
-                }
-
-                if (activeCasesReply.Items.Count > 0)
-                {
-                    return Problem(statusCode: StatusCodes.Status409Conflict, title: "Driver already has an active case.");
-                }
-
-                var createCaseRequest = new CreateCaseRequest
-                {
-                    DriverLicenseNumber = driverLicenseNumber,
-                    CaseTypeCode = string.IsNullOrWhiteSpace(createDmerCaseBody.CaseType) ? "DMER" : createDmerCaseBody.CaseType
-                };
-                if (!string.IsNullOrWhiteSpace(createDmerCaseBody.Owner))
-                {
-                    createCaseRequest.Owner = createDmerCaseBody.Owner;
-                }
-
-                var createCaseReply = await caseManagerClient.CreateCaseAsync(createCaseRequest, cancellationToken: cancellationToken);
-                if (createCaseReply.ResultStatus != CaseManagement.Service.ResultStatus.Success || string.IsNullOrEmpty(createCaseReply.Id))
-                {
-                    _logger.LogError("CMS adapter could not create a case for DMER {DocumentRecordId}: {Error}", dmerid, createCaseReply.ErrorDetail);
-                    return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Unable to create the case.");
-                }
-
-                var caseId = createCaseReply.Id;
-
-                // 3. link the DMER to the new case and add the comment
-                var updateDocumentReply = await documentManagerClient.UpdateDocumentAsync(
-                    new UpdateDocumentRequest { Id = document.DocumentId, CaseId = caseId },
-                    cancellationToken: cancellationToken);
-                if (updateDocumentReply.ResultStatus != CaseManagement.Service.ResultStatus.Success)
-                {
-                    _logger.LogError("CMS adapter could not link DMER {DocumentRecordId} to case {CaseId}: {Error}", dmerid, caseId, updateDocumentReply.ErrorDetail);
-                    return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Case created but the DMER could not be linked to it.");
-                }
-
-                if (!string.IsNullOrWhiteSpace(createDmerCaseBody.Comment))
-                {
-                    var commentReply = await caseManagerClient.CreateLegacyCaseCommentAsync(new LegacyComment
+                using var call = caseManagerClient.AddCaseToDmerAsync(
+                    new AddCaseToDmerRequest
                     {
-                        CaseId = caseId,
-                        CommentText = createDmerCaseBody.Comment,
-                        CommentTypeCode = "C",
-                        CommentDate = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-                        Driver = new Driver { DriverLicenseNumber = driverLicenseNumber }
-                    }, cancellationToken: cancellationToken);
-                    if (commentReply.ResultStatus != CaseManagement.Service.ResultStatus.Success)
-                    {
-                        _logger.LogError("CMS adapter could not add comment to case {CaseId}: {Error}", caseId, commentReply.ErrorDetail);
-                        return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Case created and DMER linked, but the comment could not be added.");
-                    }
+                        DmerId = dmerid.ToString(),
+                        CaseType = createDmerCaseBody.CaseType ?? "DMER",
+                        Owner = createDmerCaseBody.Owner ?? string.Empty,
+                        DriverId = createDmerCaseBody.DriverId ?? string.Empty,
+                        DocumentType = createDmerCaseBody.DocumentType ?? string.Empty,
+                        Comment = createDmerCaseBody.Comment ?? string.Empty
+                    },
+                    cancellationToken: cancellationToken);
+                var reply = await call.ResponseAsync;
+                if (reply.ResultStatus != CaseManagement.Service.ResultStatus.Success || string.IsNullOrEmpty(reply.Id))
+                {
+                    _logger.LogError("CMS adapter could not add a case to DMER {DocumentRecordId}: {Error}", dmerid, reply.ErrorDetail);
+                    return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Unable to add a case to the DMER.");
                 }
 
-                return Json(new { case_id = caseId });
+                return Json(new { case_id = reply.Id });
             }
             catch (RpcException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 _logger.LogError(exception, "CMS adapter request failed while adding a case to DMER {DocumentRecordId}.", dmerid);
-                return Problem(statusCode: StatusCodes.Status502BadGateway, title: "Unable to add a case to the DMER.");
+                var statusCode = exception.StatusCode switch
+                {
+                    Grpc.Core.StatusCode.InvalidArgument => StatusCodes.Status400BadRequest,
+                    Grpc.Core.StatusCode.NotFound => StatusCodes.Status404NotFound,
+                    Grpc.Core.StatusCode.AlreadyExists => StatusCodes.Status409Conflict,
+                    Grpc.Core.StatusCode.Internal => StatusCodes.Status500InternalServerError,
+                    _ => StatusCodes.Status502BadGateway
+                };
+                return Problem(statusCode: statusCode, title: statusCode == StatusCodes.Status502BadGateway
+                    ? "Unable to add a case to the DMER."
+                    : exception.Status.Detail);
             }
         }
     }

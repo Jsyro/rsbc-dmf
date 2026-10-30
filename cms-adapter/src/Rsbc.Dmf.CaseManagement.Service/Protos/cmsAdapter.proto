@@ -95,6 +95,10 @@ service CaseManager {
   //Create a case
   rpc CreateCase(CreateCaseRequest) returns (ResultStatusReply);
 
+  // Creates a case for an existing DMER, links the document, and adds an optional comment.
+  // Rejects documents already linked to a case and drivers with any active case.
+  rpc AddCaseToDmer(AddCaseToDmerRequest) returns (ResultStatusReply);
+
  //Create Dmer Case
   rpc CreateDmerCase(CreateDmerCaseRequest) returns (DmerStatusReply);
 
@@ -530,6 +534,17 @@ message CreateCaseRequest {
     string DriverGivenName = 9;
     string DriverSurname =10;
     google.protobuf.Timestamp DriverDateOfBirth = 11;
+}
+
+// Failures use gRPC InvalidArgument, NotFound, AlreadyExists, or Internal status.
+// Case creation, document linking, and commenting are separate writes, not a transaction.
+message AddCaseToDmerRequest {
+    string dmerId = 1;
+    string caseType = 2; // Defaults to DMER.
+    string owner = 3;
+    string driverId = 4; // Fallback driver licence number, not a driver GUID.
+    string documentType = 5; // Type of the new document envelope; defaults to DMER.
+    string comment = 6;
 }
 
 message CreateDmerCaseRequest {
@@ -1123,6 +1138,7 @@ message DmerStatusReply{
     }
     DmerResultStatus resultStatus = 1;
     string errorDetail = 2;
+    string id = 3; // Created or existing case ID.
 }
 
 
