@@ -1782,10 +1782,10 @@ namespace Rsbc.Dmf.CaseManagement.Service
                     ProgramArea = request.ProgramArea,
                 };
 
-                var createDriver = await _caseManager.CreateCase(caseCreateRequest);
-                if(createDriver.Success)
+                var createCaseReply = await _caseManager.CreateCase(caseCreateRequest);
+                if(createCaseReply.Success)
                 {
-                    caseCreateRequest.CaseId = createDriver?.Id;
+                    caseCreateRequest.CaseId = createCaseReply?.Id;
 
                     var documentType = string.IsNullOrWhiteSpace(request.DocumentType)
                         ? "DMER"
@@ -1888,6 +1888,9 @@ namespace Rsbc.Dmf.CaseManagement.Service
                 }
 
                 // reuse service used in auto case creation
+                // CreateDmerCase expects to create a document, but one already exists
+                // 1) SHould this recreate "BringForward" path in here? 
+    
                 var createdCase = await CreateDmerCase(new CreateDmerCaseRequest
                 {
                     DriverLicenseNumber = driverLicenseNumber,
